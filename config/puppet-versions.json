@@ -4,6 +4,7 @@
     "maximum_version": "3.99.99",
     "additional_gems": [
       { "name": "safe_yaml", "version": "~> 1.0.4" },
+      { "name": "parallel", "version": "~> 1.12.0" },
       { "name": "puppetdb-terminus", "version": "3.2.4" }
     ]
   },
