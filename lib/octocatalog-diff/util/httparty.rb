@@ -48,6 +48,9 @@ module OctocatalogDiff
 
         # Handle success
         if response.headers.key?('content-type')
+          if response.headers['content-type'] == 'application/octet-stream'
+            return { code: response.code, body: response.body }
+          end
           if response.headers['content-type'] =~ %r{/json}
             begin
               return { code: 200, body: response.body, parsed: JSON.parse(response.body) }

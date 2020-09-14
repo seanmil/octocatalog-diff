@@ -5,6 +5,7 @@ require_relative '../catalog-util/facts'
 require_relative '../external/pson/pure'
 require_relative '../util/httparty'
 
+require 'digest'
 require 'json'
 require 'securerandom'
 require 'stringio'
@@ -51,7 +52,44 @@ module OctocatalogDiff
         @options[:puppet_master] += ":#{DEFAULT_PUPPET_PORT_NUMBER}" unless @options[:puppet_master] =~ /\:\d+$/
       end
 
+      # Convert file resources source => "puppet:///..." to content => "actual content of file".
+      def convert_file_resources(dry_run = false)
+        convert_remote_file_resources(resources, @options[:branch], @options[:puppet_master])
+      end
+
       private
+
+      def get_remote_file(source, remote, environment)
+        valid_sources = [source].flatten.select { |line| line =~ %r{\Apuppet:///modules/(.+)} }
+        return unless valid_sources.any?
+
+        valid_sources.each do |src|
+          src =~ %r{\Apuppet:///modules/(.+)}
+          url = "https://#{remote}/puppet/v3/file_content/modules/#{Regexp.last_match(1)}?environment=#{environment}"
+          more_options = { headers: { 'Accept' => 'application/octet-stream' }, timeout: @timeout }
+          response = OctocatalogDiff::Util::HTTParty.get(url, @options.merge(more_options), 'puppet_master')
+          return response[:body] if response[:code] == 200
+        end
+
+        nil
+      end
+
+      def convert_remote_file_resources(resources, environment, remote)
+        resources.map! do |resource|
+          if OctocatalogDiff::CatalogUtil::FileResources::resource_convertible?(resource)
+            content = get_remote_file(resource['parameters']['source'], remote, environment)
+
+            if content
+              is_ascii = content.force_encoding('UTF-8').ascii_only?
+              resource['parameters']['content'] = is_ascii ? content : '{md5}' + Digest::MD5.hexdigest(content)
+              resource['parameters'].delete('source')
+            else
+              raise "Unable to find '#{resource['parameters']['source']}' on Puppetserver"
+            end
+          end
+          resource
+        end
+      end
 
       # Build method
       def build_catalog(logger = Logger.new(StringIO.new))

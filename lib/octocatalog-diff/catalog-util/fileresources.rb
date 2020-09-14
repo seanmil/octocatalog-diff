@@ -13,9 +13,14 @@ module OctocatalogDiff
       # Public method: Convert file resources to text. See the description of the class
       # just above for details.
       # @param obj [OctocatalogDiff::Catalog] Catalog object (will be modified)
-      def self.convert_file_resources(obj, environment = 'production')
-        return unless obj.valid? && obj.compilation_dir.is_a?(String) && !obj.compilation_dir.empty?
-        _convert_file_resources(obj.resources, obj.compilation_dir, environment)
+      def self.convert_file_resources(obj, environment = 'production', remote = nil)
+        return unless obj.valid?
+        if remote
+          _convert_remote_file_resources(obj.resources, environment, remote)
+        else
+          return unless obj.compilation_dir.is_a?(String) && !obj.compilation_dir.empty?
+          _convert_file_resources(obj.resources, obj.compilation_dir, environment)
+        end
         begin
           obj.catalog_json = ::JSON.generate(obj.catalog)
         rescue ::JSON::GeneratorError => exc
@@ -112,6 +117,37 @@ module OctocatalogDiff
               # :nocov:
               raise "Unable to find '#{resource['parameters']['source']}' at #{path}!"
               # :nocov:
+            end
+          end
+          resource
+        end
+      end
+
+      def self.get_remote_file(source, remote, environment)
+        valid_sources = [source].flatten.select { |line| line =~ %r{\Apuppet:///modules/(.+)} }
+        return unless valid_sources.any?
+
+        valid_sources.each do |src|
+          src =~ %r{\Apuppet:///modules/(.+)}
+          url = "https://#{remote}/puppet/v3/file_content/modules/#{Regexp.last_match(1)}?environment=#{environment}"
+          response = OctocatalogDiff::Util::HTTParty.get(url, {}, 'puppet_master')
+          return response[:body] if response[:code] == 200
+        end
+
+        nil
+      end
+
+      def self._convert_remote_file_resources(resources, environment, remote)
+        resources.map! do |resource|
+          if resource_convertible?(resource)
+            content = get_remote_file(resource['parameters']['source'], remote, environment)
+
+            if content
+              is_ascii = content.force_encoding('UTF-8').ascii_only?
+              resource['parameters']['content'] = is_ascii ? content : '{md5}' + Digest::MD5.hexdigest(content)
+              resource['parameters'].delete('source')
+            else
+              raise "Unable to find '#{resource['parameters']['source']}' on Puppetserver"
             end
           end
           resource
