@@ -72,6 +72,7 @@ module OctocatalogDiff
         {
           2 => {
             url: "https://#{@options[:puppet_master]}/#{@options[:branch]}/catalog/#{@node}",
+            headers: { 'Accept' => 'text/pson' },
             parameters: {
               'facts_format' => 'pson',
               'facts' => CGI.escape(@facts.fudge_timestamp.without('trusted').to_pson),
@@ -80,10 +81,30 @@ module OctocatalogDiff
           },
           3 => {
             url: "https://#{@options[:puppet_master]}/puppet/v3/catalog/#{@node}",
+            headers: { 'Accept' => 'text/pson' },
             parameters: {
-              'environment' => @options[:branch],
+              'environment' => @options[:branch] || @options[:environment],
               'facts_format' => 'pson',
               'facts' => CGI.escape(@facts.fudge_timestamp.without('trusted').to_pson),
+              'transaction_uuid' => SecureRandom.uuid
+            }
+          },
+          4 => {
+            url: "https://#{@options[:puppet_master]}/puppet/v4/catalog",
+            headers: { 'Content-Type' => 'application/json' },
+            parameters: {
+              'certname' => @node,
+              'persistence' => {
+                'facts' => false,
+                'catalog' => false
+              },
+              'environment' => @options[:branch],
+              'facts' => { 'values' => @facts.facts['values'] },
+              'options' => {
+                'prefer_requested_environment' => true,
+                'capture_logs' => true,
+                'log_level' => 'warning'
+              },
               'transaction_uuid' => SecureRandom.uuid
             }
           }
@@ -97,8 +118,8 @@ module OctocatalogDiff
         api = puppet_catalog_api[api_version]
         raise ArgumentError, "Unsupported or invalid API version #{api_version}" unless api.is_a?(Hash)
 
-        more_options = { headers: { 'Accept' => 'text/pson' }, timeout: @timeout }
-        post_hash = api[:parameters]
+        more_options = { headers: api[:headers], timeout: @timeout }
+        post_hash = api_version == 4 ? api[:parameters].to_json : api[:parameters]
 
         response = nil
         0.upto(@retry_failed_catalog) do |retry_num|
@@ -119,7 +140,7 @@ module OctocatalogDiff
           return
         end
 
-        @catalog = response[:parsed]
+        @catalog = api_version == 4 ? response[:parsed]['catalog'] : response[:parsed]
         @catalog_json = ::JSON.generate(@catalog)
         @error_message = nil
       end
